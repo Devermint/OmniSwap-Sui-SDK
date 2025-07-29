@@ -1,10 +1,11 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 /* eslint-disable @typescript-eslint/no-empty-function */
-import { MoveCallTransaction } from '@mysten/sui.js';
 import { IModule } from '../interfaces/IModule'
 import { SDK } from '../sdk';
 import {d} from "../utils/number";
 import Decimal from "decimal.js";
+import {MoveCallTransaction} from "@mysten/sui/dist/cjs/graphql/generated/queries";
+import {Transaction} from "@mysten/sui/transactions";
 
 export type CalculateRatesParams = {
   fromToken: string;
@@ -29,11 +30,11 @@ export type CreateSwapTXPayloadParams = {
 
 export class SwapModule implements IModule {
     protected _sdk: SDK;
-    
+
     get sdk() {
       return this._sdk;
     }
-    
+
     constructor(sdk: SDK) {
       this._sdk = sdk;
     }
@@ -47,7 +48,7 @@ export class SwapModule implements IModule {
       const feeMultiplier = feeScale.sub(feePct);
       const coinInAfterFees = coinInVal.mul(feeMultiplier);
       const newReservesInSize = reserveInSize.mul(feeScale).plus(coinInAfterFees);
-    
+
       return coinInAfterFees.mul(reserveOutSize).div(newReservesInSize).toDP(0);
     }
 
@@ -59,52 +60,86 @@ export class SwapModule implements IModule {
         const { feePct, feeScale } = { feePct: d(3), feeScale: d(1000) };
         const feeMultiplier = feeScale.sub(feePct);
         const newReservesOutSize = (reserveOutSize.minus(coinOutVal)).mul(feeMultiplier);
-      
+
         return coinOutVal.mul(feeScale).mul(reserveInSize).div(newReservesOutSize).toDP(0).abs();
-    
-    } 
 
-    async calculateRate(interactiveToken: string,coin_x:string,coin_y:string,coin_in_value:number) {
-      const fromCoinInfo = this.sdk.CoinList.getCoinInfoByType(coin_x);
-      const toCoinInfo = this.sdk.CoinList.getCoinInfoByType(coin_y);
-      if (!fromCoinInfo) {
-        throw new Error('From Coin not exists');
-      } 
-      if (!toCoinInfo) {
-        throw new Error('To Coin not exits');
-      }
-      const pool = await this.sdk.Pool.getPoolInfo(coin_x, coin_y);
-      const coin_x_reserve = pool.coin_x;
-      const coin_y_reserce = pool.coin_y;
+    }
+    getSpotPrice(
+        reserveIn: Decimal.Instance,
+        reserveOut: Decimal.Instance
+    ) {
+        return reserveIn.div(reserveOut);
+    }
+    getExecutionPrice(
+        amountIn: Decimal.Instance,
+        amountOut: Decimal.Instance
+    ) {
+        if (amountOut.eq(0)) return d(0);
+        return amountIn.div(amountOut);
+    }
+    getSlippage(
+        amountIn: Decimal.Instance,
+        reserveIn: Decimal.Instance,
+        reserveOut: Decimal.Instance
+    ) {
+        const spotPrice = this.getSpotPrice(reserveIn, reserveOut);
+        const amountOut = this.getCoinOutWithFees(amountIn, reserveIn, reserveOut);
+        const execPrice = this.getExecutionPrice(amountIn, amountOut);
 
-      const [reserveX, reserveY] = 
-        interactiveToken === 'from' ? [coin_x_reserve,coin_y_reserce] : [coin_y_reserce,coin_x_reserve];
+        // Positive = worse than spot, Negative = better (rare in AMMs)
+        return execPrice.minus(spotPrice).div(spotPrice);
+    }
+    async calculateRate(interactiveToken: string, coin_x: string, coin_y: string, coin_in_value: number) {
+        const pool = await this.sdk.Pool.getPoolInfo(coin_x, coin_y);
+        const coin_x_reserve = d(pool.coin_x);
+        const coin_y_reserve = d(pool.coin_y);
 
-      const coin_x_in = d(coin_in_value);
+        const [reserveIn, reserveOut] =
+            interactiveToken === 'from'
+                ? [coin_x_reserve, coin_y_reserve]
+                : [coin_y_reserve, coin_x_reserve];
 
-      const amoutOut = 
-         interactiveToken === 'from' ? this.getCoinOutWithFees(d(coin_x_in),d(reserveX),d(reserveY)) 
-         : this.getCoinInWithFee(coin_x_in,d(reserveX),d(reserveY));
-      
-      return amoutOut;
-    } 
+        const amountIn = d(coin_in_value);
+        const amountOut =
+            interactiveToken === 'from'
+                ? this.getCoinOutWithFees(amountIn, reserveIn, reserveOut)
+                : this.getCoinInWithFee(amountIn, reserveIn, reserveOut);
 
-    buildSwapTransaction(params: CreateSwapTXPayloadParams): MoveCallTransaction{
-      const {  packageObjectId,globalId } = this.sdk.networkOptions;
- 
-      const txn:MoveCallTransaction = {
-        packageObjectId:packageObjectId,
-        module: 'interface',
-        function: 'multi_swap',
-        arguments: [globalId,params.coins_in_objectIds,params.coins_in_value,params.coins_out_min],
-        typeArguments: [params.coin_x,params.coin_y],
-        gasPayment: params.gasPaymentObjectId,
-        gasBudget: 10000,
-      }
-      return txn;
-    } 
+        const spotPrice = this.getSpotPrice(reserveIn, reserveOut);
+        const execPrice = this.getExecutionPrice(amountIn, amountOut);
+        const slippage = execPrice.minus(spotPrice).div(spotPrice);
+
+        return {
+            amountOut: amountOut.toString(),
+            spotPrice: spotPrice.toString(),
+            execPrice: execPrice.toString(),
+            slippage: slippage.toString(),
+        };
+    }
+
+
+    buildSwapTransaction(params: CreateSwapTXPayloadParams) {
+        const { packageObjectId, globalId } = this.sdk.networkOptions;
+
+        const tx = new Transaction();
+        tx.setGasBudget(10_000);
+
+        tx.moveCall({
+            target: `${packageObjectId}::interface::multi_swap`,
+            arguments: [
+                tx.object(globalId),
+                tx.makeMoveVec({ elements: params.coins_in_objectIds.map(id => tx.object(id)) }),
+                tx.pure.u64(params.coins_in_value),
+                tx.pure.u64(params.coins_out_min),
+            ],
+            typeArguments: [params.coin_x, params.coin_y],
+        });
+
+        return tx;
+    }
+
  }
- 
+
  export function withSlippage(value: Decimal.Instance, slippage: Decimal.Instance, mode: 'plus' | 'minus') {
   return d(value)[mode](d(value).mul(slippage)).toDP(0);
 }

@@ -1,6 +1,5 @@
 import { readConfig } from './readConfig';
 import { Command } from 'commander';
-import { getTransactionEffects } from '@mysten/sui.js';
 
 export const faucetTokenCmd = async (
     program: Command
@@ -8,11 +7,17 @@ export const faucetTokenCmd = async (
     const facuetTokens = async (
         coin_type :string
     ) => {
-        const { suiAmmSdk, rawSigner } = readConfig(program);
+        const { suiAmmSdk, client, keypair } = readConfig(program);
         const faucetTokenTxn = await suiAmmSdk.Coin.buildFaucetTokenTransaction(coin_type);
-        const executeResponse = await rawSigner.executeMoveCall(faucetTokenTxn,"WaitForEffectsCert");
-        const response = getTransactionEffects(executeResponse)
-        console.log(`excute status: ${response?.status.status} digest: ${response?.transactionDigest} `)
+        const executeResponse = await client.signAndExecuteTransaction({
+            signer: keypair,
+            transaction: faucetTokenTxn,
+            options: { showEffects: true },
+        });
+
+        console.log(
+            `execute status: ${executeResponse.effects?.status.status} digest: ${executeResponse.digest}`
+        );
     };
     program.command('omniswap:faucet')
         .description('faucet token')

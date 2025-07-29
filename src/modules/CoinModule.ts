@@ -1,6 +1,6 @@
-import { getObjectId, Coin,MoveCallTransaction } from '@mysten/sui.js';
 import { IModule } from '../interfaces/IModule'
 import { SDK } from '../sdk';
+import {Transaction} from "@mysten/sui/transactions";
 
 export const SUI_COIN_TYPE = "0x2::sui::SUI";
 
@@ -13,7 +13,7 @@ export interface CoinInfo {
 export interface CoinObjects {
     balance: bigint,
     objects: CoinInfo[]
-} 
+}
 
 export type CreateAdminMintPayloadParams = {
     coinTypeArg: string;
@@ -25,76 +25,76 @@ export type CreateAdminMintPayloadParams = {
 
 export class CoinModule implements IModule {
     protected _sdk: SDK;
-    
+
     get sdk() {
       return this._sdk;
     }
-    
+
     constructor(sdk: SDK) {
       this._sdk = sdk;
     }
 
     // coinTypeArg: "0x2::sui::SUI"
-    async getCoinBalance(address:string,coinTypeArg:string) {
-        const coinMoveObjects = await this._sdk.jsonRpcProvider.getCoinBalancesOwnedByAddress(address);
-        const balanceObjects: CoinInfo[] = [];
-        coinMoveObjects.forEach(object => {
-            if (!Coin.isCoin(object)) {
-                return;
-            }
-            if (coinTypeArg != Coin.getCoinTypeArg(object)) {
-                return;
-            }
-            const coinObjectId = getObjectId(object);
-            const balance = Coin.getBalance(object)
-            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-            const coinSymbol = Coin.getCoinSymbol(coinTypeArg!);
-            
-            balanceObjects.push({
-                id: coinObjectId,
-                // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-                balance: balance!,
-                coinSymbol: coinSymbol
-            })
-        })
-        const balanceSum:number = balanceObjects.reduce((pre,cur)=> {
-           return  Number(cur.balance) + pre
-        },0)
+    async getCoinBalance(address: string, coinTypeArg: string) {
+        const coins = await this._sdk.client.getCoins({
+            owner: address,
+            coinType: coinTypeArg,
+        });
+
+        const balanceObjects: CoinInfo[] = coins.data.map((coin) => ({
+            id: coin.coinObjectId,
+            balance: BigInt(coin.balance),
+            coinSymbol: coinTypeArg.split("::").pop() ?? "UNKNOWN",
+        }));
+
+        const balanceSum = balanceObjects.reduce((pre, cur) => {
+            return Number(cur.balance) + pre;
+        }, 0);
+
         return {
             balance: balanceSum,
-            objects: balanceObjects
-        }
+            objects: balanceObjects,
+        };
     }
+
 
     async buildFaucetTokenTransaction(coinTypeArg: string) {
         const faucetPackageId = this.sdk.networkOptions.faucetPackageId;
         const faucetObjectId = this.sdk.networkOptions.faucetObjectId;
-        const txn:MoveCallTransaction = {
-            packageObjectId: faucetPackageId,
-            module: 'faucet',
-            function: 'claim',
-            arguments: [faucetObjectId],
+
+        const tx = new Transaction();
+        tx.setGasBudget(10_000);
+
+        tx.moveCall({
+            target: `${faucetPackageId}::faucet::claim`,
+            arguments: [tx.object(faucetObjectId)],
             typeArguments: [coinTypeArg],
-            gasBudget: 10000,
-        }
-        return txn;
+        });
+
+        return tx;
     }
-    
+
+
     // only admin
-    async buildAdminMintTestTokensTransaction(createAdminMintPayloadParams: CreateAdminMintPayloadParams) {
+    async buildAdminMintTestTokensTransaction(
+        createAdminMintPayloadParams: CreateAdminMintPayloadParams
+    ) {
         const faucetPackageId = this.sdk.networkOptions.faucetPackageId;
-        const txn:MoveCallTransaction = {
-            packageObjectId: faucetPackageId,
-            module: 'lock',
-            function: 'mint_and_transfer',
+
+        const tx = new Transaction();
+        tx.setGasBudget(createAdminMintPayloadParams.gasBudget ?? 10_000);
+
+        tx.moveCall({
+            target: `${faucetPackageId}::lock::mint_and_transfer`,
             arguments: [
-                createAdminMintPayloadParams.coinCapLock,
-                createAdminMintPayloadParams.amount,
-                createAdminMintPayloadParams.walletAddress],
+                tx.object(createAdminMintPayloadParams.coinCapLock),   // object ID
+                tx.pure.u64(createAdminMintPayloadParams.amount),      // pure number
+                tx.pure.address(createAdminMintPayloadParams.walletAddress), // wallet address
+            ],
             typeArguments: [createAdminMintPayloadParams.coinTypeArg],
-            gasBudget: createAdminMintPayloadParams.gasBudget ? createAdminMintPayloadParams.gasBudget : 10000,
-        }
-        return txn;
+        });
+
+        return tx;
     }
 
     // async buildSpiltTransaction(signerAddress: string, splitTxn:SplitCoinTransaction) {
@@ -113,4 +113,3 @@ export class CoinModule implements IModule {
     //     return serializer.getData();
     // }
  }
- 

@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-non-null-assertion */
 import { readConfig } from './readConfig';
 import { Command } from 'commander';
-import { getCreatedObjects, getTransactionEffects } from '@mysten/sui.js';
+// import { getCreatedObjects, getTransactionEffects } from '@mysten/sui.js';
 import { CreateAddLiquidTXPayloadParams,CreateRemoveLiquidTXPayloadParams } from '../modules';
 import { addHexPrefix } from '../utils/hex';
 import { randomInt } from 'crypto';
@@ -40,7 +40,7 @@ export const addLiquidCmd = async (
         slippage:string,
         gasPayment:string,
     ) => {
-        const { suiAmmSdk, rawSigner } = readConfig(program);
+        const { suiAmmSdk, client, keypair } = readConfig(program);
         const coin_x_object_ids_list = coin_x_object_ids.split(',')
         const coin_y_object_ids_list = coin_y_object_ids.split(',')
         const addLiquidParams:CreateAddLiquidTXPayloadParams = {
@@ -53,11 +53,28 @@ export const addLiquidCmd = async (
             slippage: Number(slippage),
             gasPaymentObjectId:gasPayment
         }
-        console.log(`Add Liquid params: ${JSON.stringify(addLiquidParams)}`)
+        console.log(`Add Liquid params: ${JSON.stringify(addLiquidParams)}`);
+
+// Build a TransactionBlock instead of legacy payload
         const addLiquidTxn = await suiAmmSdk.Pool.buildAddLiquidTransAction(addLiquidParams);
-        const executeResponse = await rawSigner.executeMoveCall(addLiquidTxn,"WaitForEffectsCert");
-        const response = getTransactionEffects(executeResponse)
-        console.log(`excute status: ${response?.status.status} digest: ${response?.transactionDigest} `)
+
+// Execute it with new API
+        const executeResponse = await client.signAndExecuteTransaction({
+            signer: keypair,
+            transaction: addLiquidTxn,
+            options: {
+                showEffects: true,
+                showObjectChanges: true,
+                showEvents: true,
+            },
+        });
+
+// Inspect the response
+        console.log(
+            `execute status: ${executeResponse.effects?.status.status} digest: ${executeResponse.digest}`
+        );
+
+
     };
     program.command('omniswap:addLiquid')
         .description('add liquid')
@@ -80,23 +97,31 @@ export const removeLiquidCmd = async (
         coin_x_type:string,
         coin_y_type:string,
         lp_coin_object_ids:string,
-    
+
         gasPayment:string,
     ) => {
-        const { suiAmmSdk, rawSigner } = readConfig(program);
+        const { suiAmmSdk, client, keypair } = readConfig(program);
         const lp_coin_object_ids_list = lp_coin_object_ids.split(",");
-    
+
         const removeLiquidParams:CreateRemoveLiquidTXPayloadParams = {
             coin_x: coin_x_type,
             coin_y: coin_y_type,
             lp_coin_objectIds: lp_coin_object_ids_list,
             gasPaymentObjectId:gasPayment
         }
-        console.log(`remove Liquid params: ${JSON.stringify(removeLiquidParams)}`)
+        console.log(`remove Liquid params: ${JSON.stringify(removeLiquidParams)}`);
         const removeLiquidTxn = await suiAmmSdk.Pool.buildRemoveLiquidTransAction(removeLiquidParams);
-        const executeResponse = await rawSigner.executeMoveCall(removeLiquidTxn,"WaitForEffectsCert");
-        const response = getTransactionEffects(executeResponse)
-        console.log(`excute status: ${response?.status.status} digest: ${response?.transactionDigest} `)
+
+        const executeResponse = await client.signAndExecuteTransaction({
+            transaction: removeLiquidTxn,
+            signer: keypair,
+            options: { showEffects: true, showObjectChanges: true },
+        });
+
+        console.log(
+            `execute status: ${executeResponse.effects?.status.status} digest: ${executeResponse.digest}`
+        );
+
     };
     program.command('omniswap:removeLiquid')
         .description('add liquid')
@@ -117,8 +142,8 @@ export const adminMintTestTokenCmd= async(
         for(const token of MINT_TOKEN_MAPS) {
             const coinTypeArg = token[0];
             const coinCapLock = token[1];
-            const { suiAmmSdk, rawSigner } = readConfig(program);
-            const address = addHexPrefix(await rawSigner.getAddress());
+            const { suiAmmSdk, client, keypair } = readConfig(program);
+            const address = keypair.getPublicKey().toSuiAddress();
             const mintTxn = await suiAmmSdk.Coin.buildAdminMintTestTokensTransaction({
                 coinTypeArg: coinTypeArg,
                 coinCapLock: coinCapLock,
@@ -126,11 +151,19 @@ export const adminMintTestTokenCmd= async(
                 amount: DEFAULT_MINT_AMOUNT,
                 gasBudget: DEFAULT_GAS_BUDGET + randomInt(1000)
             });
-            const executeResponse = await rawSigner.executeMoveCall(mintTxn,"WaitForEffectsCert");
-            const response = getTransactionEffects(executeResponse);
-            const createTokenObjectId =  getCreatedObjects(executeResponse)?.[0].reference.objectId;
-            console.log(`mint token: ${coinTypeArg} objectId: ${createTokenObjectId}`);
-            console.log(`excute status: ${response?.status.status} digest: ${response?.transactionDigest} `);
+            const executeResponse = await client.signAndExecuteTransaction({
+                transaction: mintTxn,
+                signer:keypair,
+                options: { showEffects: true, showObjectChanges: true },
+            });
+
+
+
+            console.log(`mint token: ${coinTypeArg}`);
+            console.log(
+                `execute status: ${executeResponse.effects?.status.status} digest: ${executeResponse.digest}`
+            );
+
         }
         // 3. get sui payment object
     }
@@ -143,7 +176,7 @@ export const adminAddAllLiquidCmd = async (
     program: Command
 ) => {
     const excuteAddliquid = async (coin_x_type:string,coin_y_type:string,coin_x_object_ids_list:string[],coin_y_object_ids_list:string[])=> {
-        const { suiAmmSdk, rawSigner } = readConfig(program);
+        const { suiAmmSdk, client, keypair } = readConfig(program);
 
         const addLiquidParams:CreateAddLiquidTXPayloadParams = {
             coin_x: coin_x_type!,
@@ -154,20 +187,27 @@ export const adminAddAllLiquidCmd = async (
             coin_y_amount: 10000000000000,
             slippage: 0.2
         }
-        console.log(`Add Liquid params: ${JSON.stringify(addLiquidParams)}`)
+        console.log(`Add Liquid params: ${JSON.stringify(addLiquidParams)}`);
         const addLiquidTxn = await suiAmmSdk.Pool.buildAddLiquidTransAction(addLiquidParams);
-        const executeResponse = await rawSigner.executeMoveCall(addLiquidTxn,"WaitForEffectsCert");
-        const response = getTransactionEffects(executeResponse)
-        console.log(`excute status: ${response?.status.status} digest: ${response?.transactionDigest} `)
+
+        const executeResponse = await client.signAndExecuteTransaction({
+            transaction: addLiquidTxn,
+            signer: keypair,
+            options: { showEffects: true, showObjectChanges: true },
+        });
+
+        console.log(
+            `execute status: ${executeResponse.effects?.status.status} digest: ${executeResponse.digest}`
+        );
     }
     const addAllLiquid = async (
     ) => {
-        const { suiAmmSdk, rawSigner } = readConfig(program);
-        // GET USDT tokenList 
+        const { suiAmmSdk, client, keypair } = readConfig(program);
+        // GET USDT tokenList
         // 1. BNB TOKEN
         const tokenTypeArgList = Array.from(MINT_TOKEN_MAPS.keys());
         const bnbTokenArg = tokenTypeArgList.find(token=> token.includes('BNB'));
-        const address = addHexPrefix(await rawSigner.getAddress());
+        const address = keypair.getPublicKey().toSuiAddress();
         // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
         const bnbObject = suiAmmSdk.Coin.getCoinBalance(address,bnbTokenArg!);
         console.log(`token: ${bnbTokenArg} balance: ${(await bnbObject).balance}`)
@@ -189,11 +229,11 @@ export const adminAddAllLiquidCmd = async (
         const bnbList = [(await bnbObject).objects[0].id];
         const ethList =  [(await ethObject).objects[0].id];
         const btcList =  [(await btcObject).objects[0].id];
-        
+
         // 3. add BNB-USDT liquid
-        await excuteAddliquid(bnbTokenArg!,usdtTokenArg!,bnbList,[(await usdtObject).objects[0].id]);    
-        await excuteAddliquid(ethTokenArg!,usdtTokenArg!,ethList,[(await usdtObject).objects[1].id]);    
-        await excuteAddliquid(btcTokenArg!,usdtTokenArg!,btcList,[(await usdtObject).objects[2].id]);    
+        await excuteAddliquid(bnbTokenArg!,usdtTokenArg!,bnbList,[(await usdtObject).objects[0].id]);
+        await excuteAddliquid(ethTokenArg!,usdtTokenArg!,ethList,[(await usdtObject).objects[1].id]);
+        await excuteAddliquid(btcTokenArg!,usdtTokenArg!,btcList,[(await usdtObject).objects[2].id]);
 
     };
     program.command('omniswap:adminAddAllLiquid')
