@@ -1,5 +1,5 @@
 {
-  "name": "@devermint/omniswap-sui-sdk",
+  "name": "omniswap-sui-sdk",
   "version": "1.0.0",
   "description": "",
   "sideEffects": false,
