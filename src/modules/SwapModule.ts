@@ -48,6 +48,7 @@ export class SwapModule implements IModule {
       const feeMultiplier = feeScale.sub(feePct);
       const coinInAfterFees = coinInVal.mul(feeMultiplier);
       const newReservesInSize = reserveInSize.mul(feeScale).plus(coinInAfterFees);
+        // console.log({function:"getCoinOutWithFees",feePct, feeScale, feeMultiplier, newReservesInSize, coinInVal, reserveOutSize, reserveInSize})
 
       return coinInAfterFees.mul(reserveOutSize).div(newReservesInSize).toDP(0);
     }
@@ -59,7 +60,9 @@ export class SwapModule implements IModule {
       ) {
         const { feePct, feeScale } = { feePct: d(3), feeScale: d(1000) };
         const feeMultiplier = feeScale.sub(feePct);
+
         const newReservesOutSize = (reserveOutSize.minus(coinOutVal)).mul(feeMultiplier);
+        // console.log({function:"getCoinInWithFee",feepct: feePct.toString(), feeScale, feeMultiplier, newReservesOutSize, coinOutVal, reserveOutSize, reserveInSize})
 
         return coinOutVal.mul(feeScale).mul(reserveInSize).div(newReservesOutSize).toDP(0).abs();
 
@@ -98,12 +101,13 @@ export class SwapModule implements IModule {
             interactiveToken === 'from'
                 ? [coin_x_reserve, coin_y_reserve]
                 : [coin_y_reserve, coin_x_reserve];
-
+        // console.info("SWAP MODULE", {interactiveToken: interactiveToken, reserves:[reserveIn, reserveOut], coin_x, coin_y, coin_in_value})
         const amountIn = d(coin_in_value);
-        const amountOut =
-            interactiveToken === 'from'
-                ? this.getCoinOutWithFees(amountIn, reserveIn, reserveOut)
-                : this.getCoinInWithFee(amountIn, reserveIn, reserveOut);
+        const amountOut =        this.getCoinOutWithFees(amountIn, reserveIn, reserveOut);
+
+        // interactiveToken === 'from'
+                // ? this.getCoinInWithFee(amountIn, reserveIn, reserveOut)
+        // console.info({amountIn, getcoinoutwithfees: this.getCoinOutWithFees(amountIn, reserveIn, reserveOut).toString(), getcoininwithfees: this.getCoinInWithFee(amountIn, reserveIn, reserveOut).toString(), reserveIn, reserveOut})
 
         const spotPrice = this.getSpotPrice(reserveIn, reserveOut);
         const execPrice = this.getExecutionPrice(amountIn, amountOut);
